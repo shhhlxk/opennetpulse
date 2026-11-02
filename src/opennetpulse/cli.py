@@ -1,11 +1,16 @@
 
 import argparse
+from datetime import datetime
 from urllib.parse import urlsplit
 
 from opennetpulse.diagnostics.dns import check_dns
 from opennetpulse.diagnostics.http import check_http
 from opennetpulse.diagnostics.tcp import check_tcp
 from opennetpulse.diagnostics.doctor import run_doctor
+from opennetpulse.diagnostics.trace import (
+    trace_route,
+    parse_trace_output
+)
 
 from opennetpulse.monitoring.monitor import monitor_host
 
@@ -16,9 +21,7 @@ from opennetpulse.reporting.json_report import (
 
 
 def run_diagnostics(target, port=None, timeout=10, output="report.json"):
-    """
-    Run DNS, HTTP and TCP diagnostics for a target.
-    """
+    """Run DNS, HTTP and TCP diagnostics for a target."""
 
     if "://" not in target:
         target_url = f"https://{target}"
@@ -48,35 +51,22 @@ def run_diagnostics(target, port=None, timeout=10, output="report.json"):
     print(f"Host: {host}")
     print(f"TCP Port: {port}")
 
-    # DNS diagnostics
     print("\n[1] DNS DIAGNOSTICS")
-
     dns_result = check_dns(host)
 
     print("Status:", dns_result["status"])
     print("IP Addresses:", dns_result["ip_addresses"])
     print("Resolution Time:", dns_result["resolution_time_ms"], "ms")
 
-    # HTTP diagnostics
     print("\n[2] HTTP DIAGNOSTICS")
-
-    http_result = check_http(
-        target_url,
-        timeout=timeout
-    )
+    http_result = check_http(target_url, timeout=timeout)
 
     print("Status:", http_result["status"])
     print("HTTP Status Code:", http_result["status_code"])
     print("Response Time:", http_result["response_time_ms"], "ms")
 
-    # TCP diagnostics
     print("\n[3] TCP DIAGNOSTICS")
-
-    tcp_result = check_tcp(
-        host,
-        port,
-        timeout=timeout
-    )
+    tcp_result = check_tcp(host, port, timeout=timeout)
 
     print("Status:", tcp_result["status"])
     print("Connection Time:", tcp_result["connection_time_ms"], "ms")
@@ -108,9 +98,7 @@ def run_diagnostics(target, port=None, timeout=10, output="report.json"):
 
 
 def run_monitoring(target, port=None, interval=5, duration=60, timeout=5):
-    """
-    Run continuous TCP monitoring for a target.
-    """
+    """Run continuous TCP monitoring for a target."""
 
     if "://" in target:
         try:
@@ -161,14 +149,9 @@ def run_monitoring(target, port=None, interval=5, duration=60, timeout=5):
     print("MONITORING RESULTS")
     print("=" * 45)
 
-    for index, measurement in enumerate(result["measurements"], start=1):
-
-        timestamp = measurement["timestamp"]
-
-        from datetime import datetime
-
+    for measurement in result["measurements"]:
         readable_time = datetime.fromtimestamp(
-            timestamp
+            measurement["timestamp"]
         ).strftime("%H:%M:%S")
 
         if measurement["status"] == "success":
@@ -208,9 +191,7 @@ def run_monitoring(target, port=None, interval=5, duration=60, timeout=5):
 
 
 def display_doctor():
-    """
-    Display OpenNetPulse environment health checks.
-    """
+    """Display OpenNetPulse environment health checks."""
 
     result = run_doctor()
 
@@ -218,9 +199,7 @@ def display_doctor():
     print("=" * 45)
 
     for check in result["checks"]:
-
         status = check["status"].upper()
-
         print(f"\n[{status}] {check['name']}")
         print("  ", check["details"])
 
@@ -229,6 +208,75 @@ def display_doctor():
     print("=" * 45)
 
     return 1 if result["status"] == "unhealthy" else 0
+
+
+def run_tracing(target, max_hops=30, hop_timeout=1000):
+    """Run traceroute and display structured hop results."""
+
+    print("\nOPENNETPULSE ROUTE TRACE")
+    print("=" * 50)
+    print("Target:", target)
+    print("Maximum hops:", max_hops)
+    print("Probe timeout:", hop_timeout, "ms")
+    print("\nTracing route...\n")
+
+    result = trace_route(
+        target=target,
+        max_hops=max_hops,
+        timeout_ms=hop_timeout
+    )
+
+    if result["status"] != "success":
+        print("Trace status:", result["status"].upper())
+        print("Error:", result.get("error"))
+        return 1
+
+    hops = parse_trace_output(result.get("output") or "")
+
+    if not hops:
+        print("No hop records could be parsed.")
+        print("\nRaw traceroute output:")
+        print(result.get("output") or "No output available.")
+        return 1
+
+    print(f"{'HOP':<6}{'ADDRESS':<25}{'PROBE TIMES (ms)':<25}{'AVERAGE':<10}")
+    print("-" * 66)
+
+    for hop in hops:
+        address = hop["address"] or "No response"
+
+        probe_times = [
+            "*" if value is None else str(value)
+            for value in hop["response_times_ms"]
+        ]
+
+        probe_display = " / ".join(probe_times)
+
+        average = (
+            f"{hop['average_ms']} ms"
+            if hop["average_ms"] is not None
+            else "N/A"
+        )
+
+        print(
+            f"{hop['hop']:<6}"
+            f"{address:<25}"
+            f"{probe_display:<25}"
+            f"{average:<10}"
+        )
+
+    print("\nTOTAL HOPS:", len(hops))
+    print("Responding hops:", sum(
+        1 for hop in hops if hop["status"] == "success"
+    ))
+    print("Non-responding hops:", sum(
+        1 for hop in hops if hop["status"] == "timeout"
+    ))
+
+    print("\nROUTE TRACE COMPLETED")
+    print("=" * 50)
+
+    return 0
 
 
 def main():
@@ -317,6 +365,31 @@ def main():
         help="Maximum TCP connection timeout in seconds."
     )
 
+    # TRACE COMMAND
+    trace_parser = subparsers.add_parser(
+        "trace",
+        help="Trace the network route to a destination."
+    )
+
+    trace_parser.add_argument(
+        "target",
+        help="Hostname or IP address to trace."
+    )
+
+    trace_parser.add_argument(
+        "--max-hops",
+        type=int,
+        default=30,
+        help="Maximum number of hops (1-64)."
+    )
+
+    trace_parser.add_argument(
+        "--hop-timeout",
+        type=int,
+        default=1000,
+        help="Timeout for each probe in milliseconds."
+    )
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -357,6 +430,20 @@ def main():
             interval=args.interval,
             duration=args.duration,
             timeout=args.timeout
+        )
+
+    elif args.command == "trace":
+
+        if not 1 <= args.max_hops <= 64:
+            parser.error("--max-hops must be between 1 and 64.")
+
+        if not 1 <= args.hop_timeout <= 60000:
+            parser.error("--hop-timeout must be between 1 and 60000.")
+
+        return run_tracing(
+            target=args.target,
+            max_hops=args.max_hops,
+            hop_timeout=args.hop_timeout
         )
 
     return 0
