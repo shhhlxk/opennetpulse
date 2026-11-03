@@ -633,6 +633,39 @@
 # 5\. Submit a pull request.
 
 # 
+## 📦 Installation
+
+OpenNetPulse is available on PyPI.
+
+Install it using pip:
+
+```bash
+pip install opennetpulse
+```
+
+## 🚀 Quick Start
+
+After installation, you can import OpenNetPulse into your Python project.
+
+```python
+import opennetpulse
+```
+
+## 📚 Package Information
+
+- **Package Name:** OpenNetPulse
+- **Version:** 0.1.0
+- **Package Manager:** PyPI
+- **Language:** Python
+
+## 🔗 Links
+
+- **PyPI:** https://pypi.org/project/opennetpulse/
+- **GitHub:** https://github.com/shhhlxk/opennetpulse
+
+## 📄 License
+
+See the LICENSE file for license information.
 
 # \## License
 
