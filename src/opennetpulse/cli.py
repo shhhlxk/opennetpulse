@@ -1,5 +1,5 @@
-
 import argparse
+import math
 from datetime import datetime
 from urllib.parse import urlsplit
 
@@ -7,10 +7,13 @@ from opennetpulse.diagnostics.dns import check_dns
 from opennetpulse.diagnostics.http import check_http
 from opennetpulse.diagnostics.tcp import check_tcp
 from opennetpulse.diagnostics.doctor import run_doctor
+
 from opennetpulse.diagnostics.trace import (
     trace_route,
     parse_trace_output
 )
+
+from opennetpulse.diagnostics.ports import scan_ports
 
 from opennetpulse.monitoring.monitor import monitor_host
 
@@ -279,6 +282,65 @@ def run_tracing(target, max_hops=30, hop_timeout=1000):
     return 0
 
 
+def run_port_scanning(target, ports, timeout=1.0):
+    """Scan selected TCP ports and display results."""
+
+    print("\nOPENNETPULSE PORT SCANNER")
+    print("=" * 50)
+    print("Target:", target)
+    print("Ports:", ", ".join(str(port) for port in ports))
+    print("Timeout:", timeout, "seconds")
+    print("\nScanning started...\n")
+
+    try:
+        result = scan_ports(
+            host=target,
+            ports=ports,
+            timeout=timeout
+        )
+
+    except ValueError as error:
+        print("Error:", error)
+        return 1
+
+    print(f"{'PORT':<12}{'STATUS':<15}{'LATENCY':<15}")
+    print("-" * 42)
+
+    for item in result["results"]:
+        latency = (
+            f"{item['latency_ms']} ms"
+            if item["latency_ms"] is not None
+            else "N/A"
+        )
+
+        print(
+            f"{item['port']:<12}"
+            f"{item['status'].upper():<15}"
+            f"{latency:<15}"
+        )
+
+        if item["error"]:
+            print("  Reason:", item["error"])
+
+    print("\nSCAN SUMMARY")
+    print("-" * 42)
+    print("Total ports:", result["total_ports"])
+    print("Open ports:", result["open_ports"])
+    print("Closed ports:", result["closed_ports"])
+    print("Timed out ports:", result["timeout_ports"])
+
+    error_ports = sum(
+        1 for item in result["results"]
+        if item["status"] == "error"
+    )
+    print("Other errors:", error_ports)
+
+    print("\nPORT SCAN COMPLETED")
+    print("=" * 50)
+
+    return 0
+
+
 def main():
 
     parser = argparse.ArgumentParser(
@@ -390,12 +452,36 @@ def main():
         help="Timeout for each probe in milliseconds."
     )
 
+    # PORT SCANNER COMMAND
+    ports_parser = subparsers.add_parser(
+        "ports",
+        help="Scan selected TCP ports on an authorized target."
+    )
+
+    ports_parser.add_argument(
+        "target",
+        help="Hostname or IP address you are authorized to scan."
+    )
+
+    ports_parser.add_argument(
+        "--ports",
+        default="22,80,443,3306,5432",
+        help="Comma-separated TCP ports (default: 22,80,443,3306,5432)."
+    )
+
+    ports_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=1.0,
+        help="Connection timeout in seconds."
+    )
+
     args = parser.parse_args()
 
     if args.command == "check":
 
-        if args.timeout <= 0:
-            parser.error("--timeout must be greater than zero.")
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            parser.error("--timeout must be a positive finite number.")
 
         if args.port is not None and not 1 <= args.port <= 65535:
             parser.error("--port must be between 1 and 65535.")
@@ -412,14 +498,14 @@ def main():
 
     elif args.command == "monitor":
 
-        if args.interval <= 0:
-            parser.error("--interval must be greater than zero.")
+        if not math.isfinite(args.interval) or args.interval <= 0:
+            parser.error("--interval must be a positive finite number.")
 
-        if args.duration <= 0:
-            parser.error("--duration must be greater than zero.")
+        if not math.isfinite(args.duration) or args.duration <= 0:
+            parser.error("--duration must be a positive finite number.")
 
-        if args.timeout <= 0:
-            parser.error("--timeout must be greater than zero.")
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            parser.error("--timeout must be a positive finite number.")
 
         if args.port is not None and not 1 <= args.port <= 65535:
             parser.error("--port must be between 1 and 65535.")
@@ -444,6 +530,34 @@ def main():
             target=args.target,
             max_hops=args.max_hops,
             hop_timeout=args.hop_timeout
+        )
+
+    elif args.command == "ports":
+
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            parser.error("--timeout must be a positive finite number.")
+
+        try:
+            ports = [
+                int(value.strip())
+                for value in args.ports.split(",")
+            ]
+        except ValueError:
+            parser.error("--ports must contain comma-separated numbers.")
+
+        if not ports:
+            parser.error("Provide at least one port.")
+
+        if any(port < 1 or port > 65535 for port in ports):
+            parser.error("Every port must be between 1 and 65535.")
+
+        if len(set(ports)) != len(ports):
+            parser.error("Duplicate ports are not allowed.")
+
+        return run_port_scanning(
+            target=args.target,
+            ports=ports,
+            timeout=args.timeout
         )
 
     return 0
